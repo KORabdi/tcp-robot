@@ -1,0 +1,38 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/mnt/c/school/site/untitled/main.cpp
+iostream
+-
+map
+-
+sys/socket.h
+-
+netinet/in.h
+-
+unistd.h
+-
+vector
+-
+thread
+-
+cstring
+-
+functional
+-
+fstream
+-
+sstream
+-
+stdexcept
+-
+algorithm
+-
+list
+-
+
