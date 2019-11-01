@@ -50,11 +50,42 @@ std::string getMessage(Message message) {
     }
 }
 struct User {
-    std::string name = std::string(10000000, 0x00);
-    std::string password = std::string(100000, 0x00);
+    std::string name = "";
+    size_t sum = 0;
+    std::string password = "";
 };
 
 class Service {
+};
+
+class Buffer {
+public:
+    Buffer(int fd) : fd(fd) {
+        vector.reserve(100);
+        vector.resize(100);
+    }
+
+    char get() {
+        if(point >= size){
+            read();
+        }
+        char ret = vector.at(point++);
+        return ret;
+    }
+
+private:
+    std::vector<char> vector;
+    int fd;
+    int size = 0;
+    int point = 0;
+    void read () {
+        size = recv(fd, vector.data(), 100, 0);
+        point = 0;
+        if(size == -1) {
+            throw std::invalid_argument(getMessage(Message::_000));
+        }
+//        vector.resize(err);
+    }
 };
 
 class TimerConnectionService : public Service {
@@ -146,7 +177,7 @@ private:
     }
 
     void listenPort() {
-        if (listen(server_fd, 20) < 0)
+        if (listen(server_fd, 100) < 0)
         {
             perror("listen");
             exit(EXIT_FAILURE);
@@ -160,6 +191,7 @@ class ClientSocketService : public Service {
     explicit ClientSocketService(int newSocket) {
         new_socket = newSocket;
         timerConnectionService = (TimerConnectionService*)serviceProvider["TimerConnectionService"];
+        buffer = new Buffer(newSocket);
     };
 
     void run() {
@@ -168,25 +200,46 @@ class ClientSocketService : public Service {
         this->startSequence();
         timerConnectionService->stop();
         close(new_socket);
+        shutdown(new_socket, 2);
+    }
+
+    void readLine(std::string * output, size_t * sum) {
+        unsigned char ch = 0x00;
+        int err = 1;
+        char lastChar = 0x00;
+        while (true) {
+            ch = buffer->get();
+            if (ch == '\n' && lastChar == '\r') {
+                output->pop_back();
+                * sum -= '\r';
+                break;
+            }
+            output->push_back(ch);
+            * sum += ch;
+            lastChar = ch;
+        };
+        if(!shouldRun || err == -1) {
+            throw std::invalid_argument(getMessage(Message::_000));
+        }
     }
 
     void readLine(std::string *output, bool shouldIgnore = false) {
         char ch = 0x00;
         int err = 1;
         char lastChar = 0x00;
-        size_t counter = 0;
-        while ((err = recv(new_socket, &ch, 1, 0)) != -1) {
+        while (true) {
+            ch = buffer->get();
             if (ch == '\n' && lastChar == '\r') {
-                counter--;
+                if (!shouldIgnore) {
+                    output->pop_back();
+                }
                 break;
             }
             if (!shouldIgnore) {
-                char* temp = &output->at(counter++);
-                *temp = ch;
+                output->push_back(ch);
             }
             lastChar = ch;
         };
-        *output = output->substr(0, counter);
         if(!shouldRun || err == -1) {
             throw std::invalid_argument(getMessage(Message::_000));
         }
@@ -195,7 +248,8 @@ class ClientSocketService : public Service {
     void readWord(std::string *output) {
         char ch = 0x00;
         int err = 1;
-        while ((err = recv(new_socket, &ch, 1, 0)) != -1) {
+        while (true) {
+            ch = buffer->get();
             if (ch == ' ') {
                 break;
             }
@@ -205,13 +259,14 @@ class ClientSocketService : public Service {
         if (!shouldRun || err == -1) {
             throw std::invalid_argument(getMessage(Message::_000));
         }
-        std::cout << "Receive:\t" << *output<< std::endl;
+        std::cout << "SOCKET ID: " << new_socket << " " << "Receive:\t" << *output<< std::endl;
     }
     void readLetters(std::string *output, int till) {
         char ch = 0x00;
         int err = 1;
         size_t counter = 0;
-        while ((err = recv(new_socket, &ch, 1, 0)) != -1) {
+        while (true) {
+            ch = buffer->get();
             counter++;
             *output += ch;
             if (counter >= till) {
@@ -224,7 +279,7 @@ class ClientSocketService : public Service {
         if(!shouldRun || err == -1) {
             throw std::invalid_argument(getMessage(Message::_000));
         }
-        std::cout << "Receive:\t" << *output << std::endl;
+        std::cout << "SOCKET ID: " << new_socket << " " << "Receive:\t" << *output << std::endl;
     }
 
     void sendMessage(Message message) {
@@ -233,7 +288,7 @@ class ClientSocketService : public Service {
             return;
         }
         send(new_socket , temp.c_str() , temp.size() , 0 );
-        std::cout << "Send:\t\t" << temp;
+        std::cout << "SOCKET ID: " << new_socket << " " << "Send:\t\t" << temp;
     }
 
     void sendData(std::string temp) {
@@ -241,7 +296,7 @@ class ClientSocketService : public Service {
             return;
         }
         send(new_socket , temp.c_str() , temp.size() , 0 );
-        std::cout << "Send:\t" << temp << std::endl;
+        std::cout << "SOCKET ID: " << new_socket << " " << "Send:\t" << temp << std::endl;
     }
 
     private:
@@ -254,9 +309,10 @@ class ClientSocketService : public Service {
     }
     void authentificate() {
         this->sendMessage(Message::_200);
-        this->readLine(&user.name);
+        this->readLine(&user.name, &user.sum);
         this->sendMessage(Message::_201);
         this->readLine(&user.password);
+        std::cout << "SOCKET ID: " << new_socket << " " << "Password:\t" << user.password << std::endl;
         if(!authorize(user)) {
             timerConnectionService->stop();
             throw std::invalid_argument(getMessage(Message::_500));
@@ -315,20 +371,23 @@ class ClientSocketService : public Service {
     User user;
     int new_socket = 0;
     TimerConnectionService* timerConnectionService;
+    Buffer * buffer;
 };
 
 bool authorize(const User & user) {
     auto temp = user.name.substr(0, 5);
-    std::cout << "AUTHORIZING: \t" << temp.data() << std::endl << std::endl;
+    std::cout << "AUTHORIZING:\t" << temp.data() << std::endl;
     if(temp != "Robot") {
         return false;
     }
     // check password
-    size_t sum = 0;
+    unsigned long long sum = 0;
     for (char i : user.name) {
-        sum += i;
+        sum += (int)i;
     }
-    return std::to_string(sum) == user.password;
+    std::cout << "SUM: \t" << sum << std::endl;
+    std::cout << "TO STRING: \t" << user.sum << std::endl;
+    return std::to_string(user.sum) == user.password;
 }
 
 void clientConnectedTask (int socket) {
@@ -339,6 +398,7 @@ void clientConnectedTask (int socket) {
         std::cout << e.what();
         clientSocketService.sendData(e.what());
         close(socket);
+        shutdown(socket, 2);
     }
 }
 
