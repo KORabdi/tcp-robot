@@ -21,18 +21,14 @@ vector
 -
 thread
 -
-cstring
--
 functional
--
-fstream
--
-sstream
 -
 stdexcept
 -
 algorithm
 -
 list
+-
+iomanip
 -
 

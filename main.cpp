@@ -8,13 +8,12 @@
 #include <unistd.h>
 #include <vector>
 #include <thread>
-#include <cstring>
 #include <functional>
-#include <fstream>
-#include <sstream>
 #include <stdexcept>
 #include <algorithm>
 #include <list>
+#include <iomanip>
+#include <sstream>
 
 #define PORT 3648
 
@@ -25,6 +24,8 @@ class TimerConnectionService;
 struct User;
 bool authorize(const User & user);
 bool is_number(const std::string& s);
+std::string convert_char(unsigned char n);
+std::string convert_int(size_t n);
 
 std::map<std::string, Service*> serviceProvider;
 
@@ -65,7 +66,7 @@ public:
         vector.resize(100);
     }
 
-    char get() {
+    unsigned char get() {
         if(point >= size){
             read();
         }
@@ -74,7 +75,7 @@ public:
     }
 
 private:
-    std::vector<char> vector;
+    std::vector<unsigned char> vector;
     int fd;
     int size = 0;
     int point = 0;
@@ -224,7 +225,7 @@ class ClientSocketService : public Service {
     }
 
     void readLine(std::string *output, bool shouldIgnore = false) {
-        char ch = 0x00;
+        unsigned char ch = 0x00;
         int err = 1;
         char lastChar = 0x00;
         while (true) {
@@ -246,23 +247,26 @@ class ClientSocketService : public Service {
     }
 
     void readWord(std::string *output) {
-        char ch = 0x00;
+        unsigned char ch = 0x00;
         int err = 1;
+        bool fail = false;
         while (true) {
             ch = buffer->get();
             if (ch == ' ') {
                 break;
             }
+            if (ch < '0' || ch > '9') {
+                throw std::invalid_argument(getMessage(Message::_501));
+            }
             *output += ch;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         };
-        if (!shouldRun || err == -1) {
+        if (!shouldRun) {
             throw std::invalid_argument(getMessage(Message::_000));
         }
-        std::cout << "SOCKET ID: " << new_socket << " " << "Receive:\t" << *output<< std::endl;
     }
-    void readLetters(std::string *output, int till) {
-        char ch = 0x00;
+
+    void readLetters(std::string *output, int till, bool isMain = false) {
+        unsigned char ch = 0x00;
         int err = 1;
         size_t counter = 0;
         while (true) {
@@ -272,14 +276,30 @@ class ClientSocketService : public Service {
             if (counter >= till) {
                 break;
             }
-            if(counter == 1 && (ch != 'I' && ch != 'F')) {
+            if(counter == 1 && isMain && (ch != 'I' && ch != 'F')) {
                 break;
             }
         };
-        if(!shouldRun || err == -1) {
+        std::cout << "Read Letters:\t\t" << *output << std::endl;
+        if(!shouldRun) {
             throw std::invalid_argument(getMessage(Message::_000));
         }
-        std::cout << "SOCKET ID: " << new_socket << " " << "Receive:\t" << *output << std::endl;
+    }
+
+    void readLetters(size_t *output, int till) {
+        unsigned char ch = 0x00;
+        size_t counter = 0;
+        while (true) {
+            ch = buffer->get();
+            counter++;
+            *output += ch;
+            if (counter >= till) {
+                break;
+            }
+        };
+        if(!shouldRun) {
+            throw std::invalid_argument(getMessage(Message::_000));
+        }
     }
 
     void sendMessage(Message message) {
@@ -323,10 +343,11 @@ class ClientSocketService : public Service {
         size_t size = 0;
         std::string type;
         size_t sum = 0;
-        int checkSum = 0;
+        std::string checkSum;
         while(shouldRun) {
             std::string temp = "";
-            this->readLetters(&type, 5);
+            type = "";
+            this->readLetters(&type, 5, true);
             if(type == "INFO ") {
                 type.clear();
                 this->readLine(&temp, true);
@@ -335,37 +356,34 @@ class ClientSocketService : public Service {
             }
             if(type == "FOTO ") {
 
-                this->sendMessage(Message::_501);
-                close(new_socket);
+                // Get size
+                temp = "";
+                this->readWord(&temp);
+                size = atoi(temp.c_str());
 
-//                this->sendMessage(Message::_202);
-//
-//                // Get size
-//                temp = "";
-//                this->readWord(&temp);
-//                if(!is_number(temp))
-//                    throw std::invalid_argument(getMessage(Message::_502));
-//                size = atoi(temp.c_str());
-//
-//                // Read bytes
-//                temp = "";
-//                sum = 0;
-//                this->countLetters(&sum, size);
-//
-//                // Read checksum
-//                temp = "";
-//                this->readLetters(&temp, 4);
-//                checkSum = temp[0] * 1000000 + temp[1] * 10000 + temp[2] * 100 + temp[3];
-//
-//                if(checkSum == sum) {
-//                    this->sendMessage(Message::_202);
-//                } else {
-//                    this->sendMessage(Message::_300);
-//                }
-//                continue;
+
+                // Read bytes
+                sum = 0;
+                this->readLetters(&sum, size);
+                std::string res = convert_int(sum);
+
+                // Read checksum
+                checkSum = "";
+                checkSum += convert_char(buffer->get());
+                checkSum += convert_char(buffer->get());
+                checkSum += convert_char(buffer->get());
+                checkSum += convert_char(buffer->get());
+                if(res == checkSum) {
+                    this->sendMessage(Message::_202);
+                } else {
+                    this->sendMessage(Message::_300);
+                }
+                continue;
             }
             timerConnectionService->stop();
-            throw std::invalid_argument(getMessage(Message::_501));
+            this->sendMessage(Message::_501);
+            shutdown(this->new_socket, 2);
+            break;
         }
     }
     User user;
@@ -374,9 +392,22 @@ class ClientSocketService : public Service {
     Buffer * buffer;
 };
 
+std::string convert_char(unsigned char n)
+{
+    std::stringstream ss;
+    ss << std::hex << std::setw(2) << std::setfill('0') << int(n);
+    return ss.str();
+}
+
+std::string convert_int(size_t n)
+{
+    std::stringstream ss;
+    ss << std::hex << std::setw(8) << std::setfill('0') << n;
+    return ss.str();
+}
+
 bool authorize(const User & user) {
     auto temp = user.name.substr(0, 5);
-    std::cout << "AUTHORIZING:\t" << temp.data() << std::endl;
     if(temp != "Robot") {
         return false;
     }
@@ -385,8 +416,6 @@ bool authorize(const User & user) {
     for (char i : user.name) {
         sum += (int)i;
     }
-    std::cout << "SUM: \t" << sum << std::endl;
-    std::cout << "TO STRING: \t" << user.sum << std::endl;
     return std::to_string(user.sum) == user.password;
 }
 
